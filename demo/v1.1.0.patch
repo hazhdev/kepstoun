@@ -1,0 +1,106 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 9dfff72..260e4b0 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -4,6 +4,12 @@
+ 
+ ## [Unreleased]
+ 
++## [1.1.0] - 2026-10-17
++
++### Added
++- Необязательная оценка `rating` (1–5) у сообщения.
++- Миграция `0002_add_rating`: nullable-колонка, обратно совместима — откат на v1.0.0 без отката базы.
++
+ ## [1.0.0] - 2026-10-17
+ 
+ ### Added
+diff --git a/migrations/0002_add_rating.sql b/migrations/0002_add_rating.sql
+new file mode 100644
+index 0000000..c7699c9
+--- /dev/null
++++ b/migrations/0002_add_rating.sql
+@@ -0,0 +1,4 @@
++-- v1.1.0: оценка от 1 до 5, необязательная.
++-- NULL-колонка → обратно совместимо: код v1.0.0 о ней не знает и продолжает работать.
++ALTER TABLE messages ADD COLUMN IF NOT EXISTS rating SMALLINT
++    CHECK (rating BETWEEN 1 AND 5);
+diff --git a/pyproject.toml b/pyproject.toml
+index 848cb4c..0c500be 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "guestbook"
+-version = "1.0.0"
++version = "1.1.0"
+ description = "Гостевая книга: FastAPI + PostgreSQL. Капстоун-проект: путь от коммита до прода."
+ readme = "README.md"
+ requires-python = ">=3.12,<3.13"
+diff --git a/src/guestbook/main.py b/src/guestbook/main.py
+index 7ca6bf4..254c69c 100644
+--- a/src/guestbook/main.py
++++ b/src/guestbook/main.py
+@@ -23,6 +23,7 @@ app = FastAPI(title="Guestbook", lifespan=lifespan)
+ class MessageIn(BaseModel):
+     author: str = Field(min_length=1, max_length=100)
+     text: str = Field(min_length=1, max_length=1000)
++    rating: int | None = Field(default=None, ge=1, le=5)
+ 
+ 
+ class MessageOut(MessageIn):
+@@ -45,18 +46,18 @@ def health() -> dict:
+ def list_messages(limit: int = 50) -> list[MessageOut]:
+     with db.connect(get_settings().database_url) as conn:
+         rows = conn.execute(
+-            "SELECT id, author, text, created_at FROM messages ORDER BY id DESC LIMIT %s",
++            "SELECT id, author, text, rating, created_at FROM messages ORDER BY id DESC LIMIT %s",
+             (min(max(limit, 1), 200),),
+         ).fetchall()
+-    return [MessageOut(id=r[0], author=r[1], text=r[2], created_at=r[3]) for r in rows]
++    return [MessageOut(id=r[0], author=r[1], text=r[2], rating=r[3], created_at=r[4]) for r in rows]
+ 
+ 
+ @app.post("/messages", status_code=201)
+ def create_message(msg: MessageIn) -> MessageOut:
+     with db.connect(get_settings().database_url) as conn:
+         r = conn.execute(
+-            "INSERT INTO messages (author, text) VALUES (%s, %s) "
+-            "RETURNING id, author, text, created_at",
+-            (msg.author, msg.text),
++            "INSERT INTO messages (author, text, rating) VALUES (%s, %s, %s) "
++            "RETURNING id, author, text, rating, created_at",
++            (msg.author, msg.text, msg.rating),
+         ).fetchone()
+-    return MessageOut(id=r[0], author=r[1], text=r[2], created_at=r[3])
++    return MessageOut(id=r[0], author=r[1], text=r[2], rating=r[3], created_at=r[4])
+diff --git a/tests/test_api.py b/tests/test_api.py
+index dfc5f9e..2036e92 100644
+--- a/tests/test_api.py
++++ b/tests/test_api.py
+@@ -20,3 +20,12 @@ def test_create_and_list(client):
+ def test_validation(client):
+     r = client.post("/messages", json={"author": "", "text": "x"})
+     assert r.status_code == 422
++
++
++def test_rating(client):
++    r = client.post("/messages", json={"author": "Оля", "text": "Класс", "rating": 5})
++    assert r.status_code == 201
++    assert r.json()["rating"] == 5
++    bad = client.post("/messages", json={"author": "a", "text": "b", "rating": 9})
++    assert bad.status_code == 422
++    assert client.post("/messages", json={"author": "a", "text": "b"}).json()["rating"] is None
+diff --git a/uv.lock b/uv.lock
+index 8b0c750..87cf623 100644
+--- a/uv.lock
++++ b/uv.lock
+@@ -79,7 +79,7 @@ wheels = [
+ 
+ [[package]]
+ name = "guestbook"
+-version = "1.0.0"
++version = "1.1.0"
+ source = { editable = "." }
+ dependencies = [
+     { name = "fastapi" },
